@@ -99,6 +99,7 @@ namespace Voron.Data
 
         private Page _lastPage;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int ReadByte()
         {
             int pos = _positions[_index];
@@ -116,14 +117,16 @@ namespace Voron.Data
                     return -1;
             }
 
-            if (!_lastPage.IsValid || _lastPage.PageNumber != chunk.PageNumber)
+            long chunkPageNumber = _chunksDetails[_index].PageNumber;
+            if (!_lastPage.IsValid || _lastPage.PageNumber != chunkPageNumber)
             {
-                _lastPage = _llt.GetPage(chunk.PageNumber);
+                _lastPage = _llt.GetPage(chunkPageNumber);
             }
 
             return _lastPage.DataPointer[_positions[_index]++];
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int Read(byte[] buffer, int offset, int count)
         {
             var pos = _positions[_index];
@@ -146,10 +149,10 @@ namespace Voron.Data
             if (count > len - pos)
                 count = len - pos;
 
-            ref Tree.ChunkDetails chunk = ref _chunksDetails[_index];
-            if (!_lastPage.IsValid || _lastPage.PageNumber != chunk.PageNumber)
+            long chunkPageNumber = _chunksDetails[_index].PageNumber;
+            if (!_lastPage.IsValid || _lastPage.PageNumber != chunkPageNumber)
             {
-                _lastPage = _llt.GetPage(chunk.PageNumber);
+                _lastPage = _llt.GetPage(chunkPageNumber);
             }
 
             fixed (byte* dst = buffer)

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Buffers.Text;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -8,6 +9,16 @@ namespace Sparrow.Json.Parsing
 {
     public unsafe class UnmanagedJsonParser : IJsonParser
     {
+        public struct Dispatcher : IJsonParserDispatcher<UnmanagedJsonParser>
+        {
+            public UnmanagedJsonParser Parser { get; }
+
+            public Dispatcher(UnmanagedJsonParser reader)
+            {
+                this.Parser = reader;
+            }
+        }
+
         private static readonly byte[] NaN = { (byte)'N', (byte)'a', (byte)'N' };
         private static readonly byte[] PositiveInfinity =
         {
@@ -55,6 +66,7 @@ namespace Sparrow.Json.Parsing
         }
 
         private static readonly ParseNumberAction[] ParseNumberTable;
+        private static readonly JsonParserToken[] ParseStructureTable;
 
         static UnmanagedJsonParser()
         {
@@ -83,6 +95,25 @@ namespace Sparrow.Json.Parsing
             ParseNumberTable['.'] = ParseNumberTable['e'] = ParseNumberTable['E'] = ParseNumberAction.ParseUnlikely;
             ParseNumberTable['-'] = ParseNumberTable['+'] = ParseNumberAction.ParseUnlikely;
             ParseNumberTable['\r'] = ParseNumberTable['\n'] = ParseNumberAction.ParseUnlikely;
+
+            ParseStructureTable = new JsonParserToken[255];
+            for (int i = 0; i < ParseStructureTable.Length; i++)
+                ParseStructureTable[i] = JsonParserToken.None;
+
+            ParseStructureTable['{'] = JsonParserToken.StartObject;
+            ParseStructureTable['}'] = JsonParserToken.EndObject;
+            ParseStructureTable['['] = JsonParserToken.StartArray;
+            ParseStructureTable[']'] = JsonParserToken.EndArray;
+
+            ParseStructureTable[':'] = JsonParserToken.ProcessSeparator;
+            ParseStructureTable[','] = JsonParserToken.ProcessSeparator;
+
+            for (byte ch = (byte)'0'; ch <= '9'; ch++)
+                ParseStructureTable[ch] = JsonParserToken.ProcessNumber;
+
+            ParseStructureTable['\''] = JsonParserToken.ProcessString;
+            ParseStructureTable['"'] = JsonParserToken.ProcessString;
+            
         }
 
         public UnmanagedJsonParser(JsonOperationContext ctx, JsonParserState state, string debugTag)
@@ -113,13 +144,13 @@ namespace Sparrow.Json.Parsing
         public int BufferSize
         {
             [MethodImpl((MethodImplOptions.AggressiveInlining))]
-            get { return (int)_bufSize; }
+            get => (int)_bufSize;
         }
 
         public int BufferOffset
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get { return (int)_pos; }
+            get => (int)_pos;
         }
 
 
@@ -156,57 +187,42 @@ namespace Sparrow.Json.Parsing
 MainLoop:
 
             byte b;
-            byte* currentBuffer = _inputBuffer;
-            uint bufferSize = _bufSize;
-            uint pos = _pos;
+            //byte* currentBuffer = _inputBuffer;
+            //uint bufferSize = _bufSize;
+            //uint pos = _pos;
             while (true)
             {
-                if (pos >= bufferSize)
+                if (_pos >= _bufSize)
                     goto ReturnFalse;
 
-                b = currentBuffer[pos];
-                pos++;
+                b = _inputBuffer[_pos];
+                _pos++;
                 _charPos++;
 
-                if (b == ':' || b == ',')
+                var token = ParseStructureTable[b];
+                if (token == JsonParserToken.ProcessSeparator)
                 {
-                    if (state.CurrentTokenType == JsonParserToken.Separator || state.CurrentTokenType == JsonParserToken.StartObject || state.CurrentTokenType == JsonParserToken.StartArray)
+                    // PERF: Improve the codegen using the knowledge that JsonParserToken is a bitwise encoded (flag style)
+                    if ((state.CurrentTokenType & (JsonParserToken.Separator | JsonParserToken.StartObject | JsonParserToken.StartArray)) != 0)                    
                         goto Error;
 
                     state.CurrentTokenType = JsonParserToken.Separator;
                     continue;
                 }
 
-                if (b == '\'' || b == '"')
+                if (token == JsonParserToken.ProcessString)
                     goto ParseString; // PERF: Avoid very lengthy method here; as we are going to return anyways.
 
-                if ((b >= '0' && b <= '9') || IsPossibleNegativeNumber(b, bufferSize, pos, currentBuffer))
+                if (token == JsonParserToken.ProcessNumber || IsPossibleNegativeNumber(b, _bufSize, _pos, _inputBuffer))
                     goto ParseNumber; // PERF: Avoid very lengthy method here; as we are going to return anyways.
-
-                if (b == '{')
+                
+                if (token != JsonParserToken.None)
                 {
-                    state.CurrentTokenType = JsonParserToken.StartObject;
+                    state.CurrentTokenType = token;
                     goto ReturnTrue;
                 }
 
-                if (b == '}')
-                {
-                    state.CurrentTokenType = JsonParserToken.EndObject;
-                    goto ReturnTrue;
-                }
-                if (b == '[')
-                {
-                    state.CurrentTokenType = JsonParserToken.StartArray;
-                    goto ReturnTrue;
-                }
-                if (b == ']')
-                {
-                    state.CurrentTokenType = JsonParserToken.EndArray;
-                    goto ReturnTrue;
-                }
-
-                bool couldRead;
-                if (!ReadUnlikely(b, ref pos, out couldRead))
+                if (!ReadUnlikely(b, ref _pos, out bool couldRead))
                     continue; // We can only continue here, if there is a failure to parse, we will throw inside ReadUnlikely.
 
                 if (couldRead)
@@ -215,13 +231,14 @@ MainLoop:
             }
 
 ParseString:
+        
             {
                 state.EscapePositions.Clear();
                 _unmanagedWriteBuffer.Clear();
                 _prevEscapePosition = 0;
                 _currentQuote = b;
                 state.CurrentTokenType = JsonParserToken.String;
-                if (ParseString(ref pos) == false)
+                if (ParseString(ref _pos) == false)
                 {
                     state.Continuation = JsonParserTokenContinuation.PartialString;
                     goto ReturnFalse;
@@ -242,10 +259,10 @@ ParseNumber:
                 _isOverflow = false;
 
                 // ParseNumber need to call _charPos++ & _pos++, so we'll reset them for the first char
-                pos--;
+                _pos--;
                 _charPos--;
 
-                if (ParseNumber(ref state.Long, ref pos) == false)
+                if (ParseNumber(ref state.Long, ref _pos) == false)
                 {
                     state.Continuation = JsonParserTokenContinuation.PartialNumber;
                     goto ReturnFalse;
@@ -260,11 +277,9 @@ Error:
             ThrowCannotHaveCharInThisPosition(b);
 
 ReturnTrue:
-            _pos = pos;
             return true;
 
 ReturnFalse:
-            _pos = pos;
             return false;
 
 
@@ -732,16 +747,16 @@ NotANumber:
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ParseString(ref uint currentPos)
         {
-            byte* currentBuffer = _inputBuffer;
-            byte[] parseStringTable = ParseStringTable;
+            //byte* currentBuffer = _inputBuffer;
+            //byte[] parseStringTable = ParseStringTable;
 
-            uint bufferSize = _bufSize;
+            //uint bufferSize = _bufSize;
 
             while (true)
             {
                 _currentStrStart = (int)currentPos;
 
-                while (currentPos < bufferSize)
+                while (currentPos < _bufSize)
                 {
                     if (_parsingUnicode)
                     {
@@ -753,7 +768,7 @@ NotANumber:
                         continue;
                     }
 
-                    byte b = currentBuffer[currentPos];
+                    byte b = _inputBuffer[currentPos];
                     currentPos++;
                     _charPos++;
 
@@ -763,7 +778,7 @@ NotANumber:
                         if (b != _currentQuote && b != (byte)'\\')
                             continue;
 
-                        _unmanagedWriteBuffer.Write(currentBuffer + _currentStrStart, (int)currentPos - _currentStrStart - 1 /* don't include the escape or the last quote */);
+                        _unmanagedWriteBuffer.Write(_inputBuffer + _currentStrStart, (int)currentPos - _currentStrStart - 1 /* don't include the escape or the last quote */);
 
                         if (b == _currentQuote)
                             goto ReturnTrue;
@@ -783,7 +798,7 @@ NotANumber:
                             _prevEscapePosition = _unmanagedWriteBuffer.SizeInBytes + 1;
                         }
 
-                        byte op = parseStringTable[b];
+                        byte op = ParseStringTable[b];
                         if (op > Unlikely)
                         {
                             // We have a known substitution to apply
@@ -796,15 +811,15 @@ NotANumber:
                         }
                         else if (b == (byte)'\r')
                         {
-                            if (currentPos >= bufferSize)
+                            if (currentPos >= _bufSize)
                                 goto ReturnFalse;
 
                             _line++;
                             _charPos = 1;
-                            if (currentPos >= bufferSize)
+                            if (currentPos >= _bufSize)
                                 goto ReturnFalse;
 
-                            if (currentBuffer[currentPos] == (byte)'\n')
+                            if (_inputBuffer[currentPos] == (byte)'\n')
                                 currentPos++; // consume the \,\r,\n
                         }
                         else if (b == (byte)'u')
@@ -820,9 +835,9 @@ NotANumber:
                 }
 
                 // copy the buffer to the native code, then refill
-                _unmanagedWriteBuffer.Write(currentBuffer + _currentStrStart, (int)currentPos - _currentStrStart);
+                _unmanagedWriteBuffer.Write(_inputBuffer + _currentStrStart, (int)currentPos - _currentStrStart);
 
-                if (currentPos >= bufferSize)
+                if (currentPos >= _bufSize)
                     goto ReturnFalse;
             }
 

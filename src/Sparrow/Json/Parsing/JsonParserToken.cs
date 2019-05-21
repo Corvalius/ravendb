@@ -1,23 +1,33 @@
+using System;
+
 namespace Sparrow.Json.Parsing
 {
+    [Flags]
     public enum JsonParserToken
     {
-        None            = 0,
-        Null            = 1 << 1,
-        False           = 1 << 2,
-        True            = 1 << 3,
-        String          = 1 << 4,
-        Float           = 1 << 5,
-        Integer         = 1 << 6,
-        Separator       = 1 << 7,
-        StartObject     = 1 << 8,
-        StartArray      = 1 << 9,
-        EndArray        = 1 << 10,
-        EndObject       = 1 << 11,
-        Blob            = 1 << 12,
+        None                 = 0,
+        Null                 = 1 << 1,
+        False                = 1 << 2,
+        True                 = 1 << 3,
+        String               = 1 << 4,
+        Float                = 1 << 5,
+        Integer              = 1 << 6,
+        Separator            = 1 << 7,
+        StartObject          = 1 << 8,
+        StartArray           = 1 << 9,
+        EndArray             = 1 << 10,
+        EndObject            = 1 << 11,
+        Blob                 = 1 << 12,
+
+
+        // PERF: ONLY USED AS STRUCTURAL MARKERS
+        ProcessNumber        = 1 << 13,
+        ProcessSeparator     = 1 << 14,
+        ProcessString        = 1 << 15
     }
 
     // should never be visible externally
+    [Flags]
     public enum JsonParserTokenContinuation
     {
         None                    =   0,

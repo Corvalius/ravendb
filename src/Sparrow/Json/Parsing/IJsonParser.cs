@@ -8,4 +8,9 @@ namespace Sparrow.Json.Parsing
         void ValidateFloat();
         string GenerateErrorState();
     }
+
+    public interface IJsonParserDispatcher<out T> where T : IJsonParser
+    {
+        T Parser { get; }
+    }
 }

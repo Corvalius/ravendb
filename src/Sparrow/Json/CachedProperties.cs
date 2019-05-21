@@ -5,6 +5,7 @@ using Sparrow.Collections;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Sparrow.Binary;
+using Sparrow.Collections.Cedar;
 
 namespace Sparrow.Json
 {
@@ -20,7 +21,7 @@ namespace Sparrow.Json
     /// This is done so we'll not write properties that don't belong to that document, but to 
     /// previous documents handled in the same batch
     /// </summary>
-    public class CachedProperties
+    public unsafe class CachedProperties
     {
         private readonly JsonOperationContext _context;
         private int _propertyNameCounter;
@@ -118,9 +119,12 @@ namespace Sparrow.Json
 
         private readonly CachedSort[] _cachedSorts = new CachedSort[CachedSortsSize]; // size is fixed and used in GetPropertiesHashedIndex
 
+        private readonly FastList<PropertyName> _globalPropertyHolder = new FastList<PropertyName>();
+        private readonly CedarTrie<int> _propertyNameToId = new CedarTrie<int>();
+
         private readonly FastList<PropertyName> _docPropNames = new FastList<PropertyName>();
         private readonly SortedDictionary<PropertyName, object> _propertiesSortOrder = new SortedDictionary<PropertyName, object>();
-        private readonly Dictionary<LazyStringValue, PropertyName> _propertyNameToId = new Dictionary<LazyStringValue, PropertyName>(default(LazyStringValueStructComparer));
+        //private readonly Dictionary<LazyStringValue, int> _propertyNameToId = new Dictionary<LazyStringValue, int>(default(LazyStringValueStructComparer));
         private bool _propertiesNeedSorting;
 
         public int PropertiesDiscovered;
@@ -133,10 +137,11 @@ namespace Sparrow.Json
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public PropertyName GetProperty(LazyStringValue propName)
-        {
-            PropertyName prop;
-            if (_propertyNameToId.TryGetValue(propName, out prop))
+        {            
+            if (_propertyNameToId.ExactMatchSearch(propName.Buffer, propName.Size, out int globalIndex) == ErrorCode.Success)
             {
+                PropertyName prop = _globalPropertyHolder[globalIndex];
+
                 // PERF: This is the most common scenario, we need it to come first. 
                 if (prop.PropertyId < PropertiesDiscovered)
                     return prop;
@@ -163,9 +168,15 @@ namespace Sparrow.Json
                 PropertyId = propIndex
             };
 
+            int globalIndex = _globalPropertyHolder.Count;
+            _globalPropertyHolder.Add(prop);
+
             _docPropNames.Add(prop);
             _propertiesSortOrder.Add(prop, prop);
-            _propertyNameToId[propName] = prop;
+
+            //_propertyNameToId[propName] = globalIndex;
+            _propertyNameToId.Update(propName.Buffer, propName.Size, globalIndex);
+
             _propertiesNeedSorting = true;
             if (_docPropNames.Count > PropertiesDiscovered + 1)
             {

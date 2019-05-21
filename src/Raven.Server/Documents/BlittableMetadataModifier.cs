@@ -143,19 +143,28 @@ namespace Raven.Server.Documents
                 _readingMetadataObject = false;
         }
 
+        private struct Dispatcher : IJsonParserDispatcher<IJsonParser>
+        {
+            public IJsonParser Parser { get; }
+
+            public Dispatcher(IJsonParser reader)
+            {
+                this.Parser = reader;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool AboutToReadPropertyName(IJsonParser reader, JsonParserState state)
         {
-            if (reader is UnmanagedJsonParser)
-                return AboutToReadPropertyNameInternal((UnmanagedJsonParser)reader, state);
-            if (reader is ObjectJsonParser)
-                return AboutToReadPropertyNameInternal((ObjectJsonParser)reader, state);
-
-            return AboutToReadPropertyNameInternal(reader, state);
+            return AboutToReadPropertyName<Dispatcher, IJsonParser>(new Dispatcher(reader), state);
         }
 
-        private unsafe bool AboutToReadPropertyNameInternal(UnmanagedJsonParser reader, JsonParserState state)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public unsafe bool AboutToReadPropertyName<TDispatcher, T>(TDispatcher dispatcher, JsonParserState state)
+            where T : IJsonParser
+            where TDispatcher : IJsonParserDispatcher<T>
         {
+            T reader = dispatcher.Parser;
             if (_state != State.None)
             {
                 if (!AboutToReadWithStateUnlikely(reader, state))
@@ -180,77 +189,18 @@ namespace Raven.Server.Documents
                     return true;
                 }
 
-                if (AboutToReadPropertyNameInMetadataUnlikely(reader, state, out bool aboutToReadPropertyName))
+                if (AboutToReadPropertyNameInMetadataUnlikely<TDispatcher, T>(dispatcher, state, out bool aboutToReadPropertyName))
                     return aboutToReadPropertyName;
-            }
-        }
+            }           
+        }        
 
-        private unsafe bool AboutToReadPropertyNameInternal(ObjectJsonParser reader, JsonParserState state)
-        {
-            if (_state != State.None)
-            {
-                if (!AboutToReadWithStateUnlikely(reader, state))
-                    return false;
-            }
-
-            _state = State.None;
-
-            while (true)
-            {
-                if (reader.Read() == false)
-                    return false;
-
-                if (state.CurrentTokenType != JsonParserToken.String)
-                    return true; // let the caller handle that
-
-                if (_readingMetadataObject == false)
-                {
-                    if (state.StringSize == 9 && state.StringBuffer[0] == (byte)'@' && *(long*)(state.StringBuffer + 1) == 7022344802737087853)
-                        _readingMetadataObject = true;
-
-                    return true;
-                }
-
-                if (AboutToReadPropertyNameInMetadataUnlikely(reader, state, out bool aboutToReadPropertyName))
-                    return aboutToReadPropertyName;
-            }
-        }
-
-        private unsafe bool AboutToReadPropertyNameInternal(IJsonParser reader, JsonParserState state)
-        {
-            if (_state != State.None)
-            {
-                if (!AboutToReadWithStateUnlikely(reader, state))
-                    return false;
-            }
-
-            _state = State.None;
-
-            while (true)
-            {
-                if (reader.Read() == false)
-                    return false;
-
-                if (state.CurrentTokenType != JsonParserToken.String)
-                    return true; // let the caller handle that
-
-                if (_readingMetadataObject == false)
-                {
-                    if (state.StringSize == 9 && state.StringBuffer[0] == (byte)'@' && *(long*)(state.StringBuffer + 1) == 7022344802737087853)
-                        _readingMetadataObject = true;
-
-                    return true;
-                }
-
-                if (AboutToReadPropertyNameInMetadataUnlikely(reader, state, out bool aboutToReadPropertyName))
-                    return aboutToReadPropertyName;
-            }
-        }
-
-        private unsafe bool AboutToReadPropertyNameInMetadataUnlikely(IJsonParser reader, JsonParserState state, out bool aboutToReadPropertyName)
+        private unsafe bool AboutToReadPropertyNameInMetadataUnlikely<TDispatcher, T>(TDispatcher dispatcher, JsonParserState state, out bool aboutToReadPropertyName)
+            where T : IJsonParser
+            where TDispatcher : IJsonParserDispatcher<T>
         {
             aboutToReadPropertyName = true;
 
+            T reader = dispatcher.Parser;
             switch (state.StringSize)
             {
                 default: // accept this property

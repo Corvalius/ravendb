@@ -166,6 +166,16 @@ namespace Sparrow.Json.Parsing
 
     public unsafe class ObjectJsonParser : IJsonParser
     {
+        public struct Dispatcher : IJsonParserDispatcher<ObjectJsonParser>
+        {
+            public ObjectJsonParser Parser { get; }
+
+            public Dispatcher(ObjectJsonParser reader)
+            {
+                this.Parser = reader;
+            }
+        }
+
         private readonly JsonParserState _state;
         private readonly JsonOperationContext _ctx;
         private readonly FastStack<object> _elements = new FastStack<object>();
